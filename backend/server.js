@@ -1,6 +1,3 @@
-// server.js
-
-// 1. IMPORT DEPENDENCIES
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
@@ -13,30 +10,30 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 
-// 2. INITIALIZE APP & SOCKET.IO
+// INITIALIZE APP & SOCKET.IO
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow all origins for simplicity
+        origin: "*", 
         methods: ["GET", "POST", "PUT"]
     }
 });
 
-// 3. MIDDLEWARE
+//  MIDDLEWARE
 app.use(cors());
 app.use(express.json());
 
-// 4. DATABASE CONNECTION (MongoDB)
-// IMPORTANT: Replace with your own MongoDB connection string
+//  DATABASE CONNECTION (MongoDB)
+
 const MONGO_URI = process.env.MONGO_URI;
-const JWT_SECRET = process.env.SECRET_KEY; // Replace with a strong secret key
+const JWT_SECRET = process.env.SECRET_KEY; 
 
 mongoose.connect(MONGO_URI)
     .then(() => console.log("MongoDB connected successfully."))
     .catch(err => console.error("MongoDB connection error:", err));
 
-// 5. DATABASE SCHEMA AND MODEL
+//  DATABASE SCHEMA AND MODEL
 const teacherSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
@@ -47,7 +44,7 @@ const teacherSchema = new mongoose.Schema({
 });
 const Teacher = mongoose.model('Teacher', teacherSchema);
 
-// 6. API ROUTES
+// API ROUTES
 
 // --- AUTHENTICATION ROUTES ---
 
@@ -186,12 +183,4 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 
-// --- How to Run This Server ---
-// 1. Make sure you have Node.js and npm installed.
-// 2. Create a folder for your backend, navigate into it.
-// 3. Run `npm init -y` to create a package.json file.
-// 4. Install dependencies: `npm install express socket.io cors mongoose bcryptjs jsonwebtoken`
-// 5. Save the code above as `server.js`.
-// 6. IMPORTANT: Replace the `MONGO_URI` and `JWT_SECRET` with your actual credentials.
-// 7. Run `node server.js` to start the server.
 
