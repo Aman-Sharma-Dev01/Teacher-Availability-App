@@ -41,6 +41,8 @@ const teacherSchema = new mongoose.Schema({
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
+    phone: { type: String, required: true},
+    roomno: { type: String, required: true},
     isAvailable: { type: Boolean, default: false }
 });
 const Teacher = mongoose.model('Teacher', teacherSchema);
@@ -52,9 +54,9 @@ const Teacher = mongoose.model('Teacher', teacherSchema);
 // POST /api/auth/register - Register a new teacher
 app.post('/api/auth/register', async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password, phone, roomno } = req.body;
 
-        if (!name || !email || !password) {
+        if (!name || !email || !password || !phone || !roomno) {
             return res.status(400).json({ message: "Please provide all required fields." });
         }
 
@@ -66,7 +68,7 @@ app.post('/api/auth/register', async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        const newTeacher = new Teacher({ name, email, password: hashedPassword });
+        const newTeacher = new Teacher({ name, email, password: hashedPassword , phone, roomno });
         await newTeacher.save();
 
         res.status(201).json({ message: "Teacher registered successfully." });
