@@ -1,17 +1,17 @@
-import React, { useState, useEffect } from 'react';
+// teacher-app/src/App.js
+
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import './App.css'; // Import the CSS file
+import './App.css';
 
-// --- Configuration ---
-// Make sure this points to your backend server URL
-const API_URL = 'http://localhost:5000'; 
+const API_URL = 'http://localhost:5000';
 const socket = io(API_URL);
 
 // --- Main App Component ---
 export default function App() {
     const [token, setToken] = useState(localStorage.getItem('teacher-token') || null);
-    const [view, setView] = useState(token ? 'dashboard' : 'login'); // 'login', 'register', 'dashboard'
+    const [view, setView] = useState(token ? 'dashboard' : 'login');
 
     const handleLoginSuccess = (newToken) => {
         localStorage.setItem('teacher-token', newToken);
@@ -20,9 +20,10 @@ export default function App() {
     };
 
     const handleLogout = () => {
+        // Optimistically update UI before removing token
+        setView('login');
         localStorage.removeItem('teacher-token');
         setToken(null);
-        setView('login');
     };
 
     const renderView = () => {
@@ -52,15 +53,19 @@ function Login({ onLoginSuccess, onSwitchToRegister }) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        setIsLoading(true);
         try {
             const response = await axios.post(`${API_URL}/api/auth/login`, { email, password });
             onLoginSuccess(response.data.token);
         } catch (err) {
             setError(err.response?.data?.message || 'Login failed. Please try again.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -74,8 +79,8 @@ function Login({ onLoginSuccess, onSwitchToRegister }) {
                     <input id="password" name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required className="input-field input-field-bottom" placeholder="Password" />
                 </div>
                 <div>
-                    <button type="submit" className="submit-button">
-                        Sign in
+                    <button type="submit" className="submit-button" disabled={isLoading}>
+                        {isLoading ? 'Signing in...' : 'Sign in'}
                     </button>
                 </div>
             </form>
@@ -89,43 +94,47 @@ function Login({ onLoginSuccess, onSwitchToRegister }) {
     );
 }
 
-// --- Register Component ---
+// --- Register Component (Updated) ---
 function Register({ onSwitchToLogin }) {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [phone, setPhone] = useState('');
+    const [roomno, setRoomno] = useState('');
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const [roomno, setRoomno] = useState('');
-    const [phone , setPhoneno] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
         setSuccess('');
+        setIsLoading(true);
         try {
-            await axios.post(`${API_URL}/api/auth/register`, { name, email, password , roomno , phone });
-            setSuccess('Registration successful! Please log in.');
+            await axios.post(`${API_URL}/api/auth/register`, { name, email, password, phone, roomno });
+            setSuccess('Registration successful! Redirecting to login...');
             setTimeout(() => onSwitchToLogin(), 2000);
         } catch (err) {
             setError(err.response?.data?.message || 'Registration failed. Please try again.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
     return (
         <div>
-            <h2 className="form-title">Create Account</h2>
+            <h2 className="form-title">Create Teacher Account</h2>
             {error && <p className="error-message">{error}</p>}
             {success && <p className="success-message">{success}</p>}
             <form onSubmit={handleSubmit} className="form-body">
                  <input name="name" type="text" value={name} onChange={e => setName(e.target.value)} required className="input-field input-field-top" placeholder="Full Name" />
                  <input name="email" type="email" value={email} onChange={e => setEmail(e.target.value)} required className="input-field" placeholder="Email address" />
-                 <input id="email-address" name="phoneno" type="text" value={phone} onChange={e => setPhoneno(e.target.value)} required className="input-field input-field-top" placeholder="Phone No." />
-                 <input name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required className="input-field input-field-bottom" placeholder="Password" />
-                 <input id="email-address" name="roomno" type="text" value={roomno} onChange={e => setRoomno(e.target.value)} required className="input-field input-field-top" placeholder="Room No." />
+                 <input name="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} required className="input-field" placeholder="Phone Number" />
+                 <input name="roomno" type="text" value={roomno} onChange={e => setRoomno(e.target.value)} required className="input-field" placeholder="Room Number" />
+                 <input name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required className="input-field input-field-bottom" placeholder="Password (min 6 characters)" />
                 <div>
-                    <button type="submit" className="submit-button">
-                        Register
+                    <button type="submit" className="submit-button" disabled={isLoading}>
+                        {isLoading ? 'Registering...' : 'Register'}
                     </button>
                 </div>
             </form>
@@ -139,32 +148,100 @@ function Register({ onSwitchToLogin }) {
     );
 }
 
-// --- Teacher Dashboard Component ---
+
+// --- Helper function to format seconds into HH:MM:SS ---
+const formatTime = (totalSeconds) => {
+    if (totalSeconds < 0) totalSeconds = 0;
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    return [hours, minutes, seconds]
+        .map(v => v < 10 ? "0" + v : v)
+        .join(":");
+};
+
+
+// --- Teacher Dashboard Component (Updated with Live Timer) ---
 function TeacherDashboard({ token, onLogout }) {
     const [isAvailable, setIsAvailable] = useState(false);
     const [teacherName, setTeacherName] = useState('Teacher');
     const [error, setError] = useState('');
+    const [availableTime, setAvailableTime] = useState(0); // Time from DB
+    const [sessionDuration, setSessionDuration] = useState(0); // Live timer for current session
+    const [queries, setQueries] = useState([]);
+
+    // useRef to hold the token to avoid dependency issues in useEffect
+    const tokenRef = useRef(token);
 
     useEffect(() => {
-        const fetchInitialStatus = async () => {
-             try {
-                const decodedToken = JSON.parse(atob(token.split('.')[1]));
-                const teacherId = decodedToken.id;
-                
-                const response = await axios.get(`${API_URL}/api/teachers`);
-                const currentTeacher = response.data.find(t => t._id === teacherId);
+        const decodedToken = JSON.parse(atob(tokenRef.current.split('.')[1]));
+        const currentTeacherId = decodedToken.id;
 
+        // Join the socket room for this specific teacher
+        socket.emit('joinRoom', currentTeacherId);
+
+        // Fetch all initial data needed for the dashboard
+        const fetchInitialData = async () => {
+            try {
+                const headers = { 'x-auth-token': tokenRef.current };
+                const [teachersRes, timeRes, queriesRes] = await Promise.all([
+                    axios.get(`${API_URL}/api/teachers`, { headers }),
+                    axios.get(`${API_URL}/api/teachers/my-time`, { headers }),
+                    axios.get(`${API_URL}/api/queries/teacher`, { headers })
+                ]);
+
+                const currentTeacher = teachersRes.data.find(t => t._id === currentTeacherId);
                 if (currentTeacher) {
                     setIsAvailable(currentTeacher.isAvailable);
                     setTeacherName(currentTeacher.name);
                 }
+                setAvailableTime(timeRes.data.totalAvailableTime);
+                setQueries(queriesRes.data);
+
             } catch (err) {
-                console.error("Error fetching initial status:", err);
-                setError("Could not load your status.");
+                console.error("Error fetching initial data:", err);
+                if (err.response?.status === 401 || err.response?.status === 400) {
+                   onLogout(); // Token is invalid, log out
+                } else {
+                   setError("Could not load dashboard data.");
+                }
             }
         };
-        fetchInitialStatus();
-    }, [token]);
+
+        fetchInitialData();
+    }, [onLogout]);
+
+    // Effect for the LIVE timer when status is 'Available'
+    useEffect(() => {
+        let timer;
+        if (isAvailable) {
+            timer = setInterval(() => {
+                setSessionDuration(prev => prev + 1);
+            }, 1000);
+        }
+        return () => clearInterval(timer);
+    }, [isAvailable]);
+
+    // Effect for handling incoming socket events
+    useEffect(() => {
+        const handleNewQuery = (newQuery) => {
+            setQueries(prevQueries => [newQuery, ...prevQueries]);
+        };
+
+        const handleQueryUpdate = (updatedQuery) => {
+            if(updatedQuery.status === 'ended'){
+                setQueries(prevQueries => prevQueries.filter(q => q._id !== updatedQuery._id));
+            }
+        };
+
+        socket.on('newQuery', handleNewQuery);
+        socket.on('queryUpdated', handleQueryUpdate);
+
+        return () => {
+            socket.off('newQuery', handleNewQuery);
+            socket.off('queryUpdated', handleQueryUpdate);
+        };
+    }, []);
 
     const handleToggle = async () => {
         const newStatus = !isAvailable;
@@ -175,17 +252,41 @@ function TeacherDashboard({ token, onLogout }) {
                 { headers: { 'x-auth-token': token } }
             );
             setIsAvailable(newStatus);
+
+            // If we just became unavailable, the backend has saved the time.
+            // Re-fetch the total from the server to get the precise value and reset the session timer.
+            if (!newStatus) {
+                const timeRes = await axios.get(`${API_URL}/api/teachers/my-time`, { headers: { 'x-auth-token': token } });
+                setAvailableTime(timeRes.data.totalAvailableTime);
+                setSessionDuration(0);
+            }
         } catch (err) {
             setError('Failed to update status. Please try again.');
-            console.error(err);
+        }
+    };
+
+    const handleEndMeeting = async (queryId) => {
+        try {
+            await axios.put(`${API_URL}/api/queries/${queryId}/end`, {}, {
+                headers: { 'x-auth-token': token }
+            });
+            // The socket 'queryUpdated' event will remove it from the list automatically
+        } catch (err) {
+            setError("Could not end the meeting. Please try again.");
         }
     };
 
     return (
         <div className="dashboard-container">
-            <h1 className="dashboard-title">Teacher Dashboard</h1>
-            <p className="welcome-message">Welcome, {teacherName}!</p>
+            <div className="dashboard-header">
+                <h1 className="dashboard-title">Teacher Dashboard</h1>
+                <p className="welcome-message">Welcome, {teacherName}!</p>
+            </div>
             
+            <div className="time-tracker">
+                Today's Available Time: <strong>{formatTime(availableTime + sessionDuration)}</strong>
+            </div>
+
             <div className="status-section">
                 <p className="status-text">Your current status is:</p>
                 <span className={`status-badge ${isAvailable ? 'status-available' : 'status-unavailable'}`}>
@@ -206,6 +307,30 @@ function TeacherDashboard({ token, onLogout }) {
                         </div>
                     </label>
                 </div>
+            </div>
+
+            <div className="queries-section">
+                <h2 className="queries-title">Pending Queries ({queries.length})</h2>
+                {queries.length > 0 ? (
+                    <ul className="queries-list">
+                        {queries.map(query => (
+                            <li key={query._id} className="query-item">
+                                <div className="query-content">
+                                    <p className="query-student"><strong>From:</strong> {query.studentName}</p>
+                                    <p className="query-text">{query.queryText}</p>
+                                </div>
+                                <button
+                                    onClick={() => handleEndMeeting(query._id)}
+                                    className="end-meeting-button"
+                                >
+                                    End Meeting
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="no-queries-text">No pending queries right now.</p>
+                )}
             </div>
 
             <button onClick={onLogout} className="logout-button">
