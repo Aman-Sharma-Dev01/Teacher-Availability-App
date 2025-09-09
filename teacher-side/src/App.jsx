@@ -3,7 +3,7 @@ import axios from 'axios';
 import { io } from 'socket.io-client';
 import './App.css';
 
-const API_URL = 'http://localhost:5000';
+const API_URL = 'https://teacher-availability-app.onrender.com';
 const socket = io(API_URL);
 
 // --- Main App: Handles Auth Routing ---
