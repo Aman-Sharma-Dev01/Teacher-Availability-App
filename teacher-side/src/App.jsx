@@ -1,5 +1,3 @@
-// teacher-app/src/App.js
-
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
@@ -8,7 +6,7 @@ import './App.css';
 const API_URL = 'http://localhost:5000';
 const socket = io(API_URL);
 
-// --- Main App Component ---
+// --- Main App: Handles Auth Routing ---
 export default function App() {
     const [token, setToken] = useState(localStorage.getItem('teacher-token') || null);
     const [view, setView] = useState(token ? 'dashboard' : 'login');
@@ -20,12 +18,13 @@ export default function App() {
     };
 
     const handleLogout = () => {
-        // Optimistically update UI before removing token
+        // Optimistically update UI before removing token to prevent flicker
         setView('login');
         localStorage.removeItem('teacher-token');
         setToken(null);
     };
 
+    // Renders the correct view based on auth state
     const renderView = () => {
         switch (view) {
             case 'login':
@@ -94,7 +93,7 @@ function Login({ onLoginSuccess, onSwitchToRegister }) {
     );
 }
 
-// --- Register Component (Updated) ---
+// --- Register Component ---
 function Register({ onSwitchToLogin }) {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
@@ -131,7 +130,7 @@ function Register({ onSwitchToLogin }) {
                  <input name="email" type="email" value={email} onChange={e => setEmail(e.target.value)} required className="input-field" placeholder="Email address" />
                  <input name="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} required className="input-field" placeholder="Phone Number" />
                  <input name="roomno" type="text" value={roomno} onChange={e => setRoomno(e.target.value)} required className="input-field" placeholder="Room Number" />
-                 <input name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required className="input-field input-field-bottom" placeholder="Password (min 6 characters)" />
+                 <input name="password" type="password" value={password} onChange={e => setPassword(e.target.value)} required className="input-field input-field-bottom" placeholder="Password" />
                 <div>
                     <button type="submit" className="submit-button" disabled={isLoading}>
                         {isLoading ? 'Registering...' : 'Register'}
@@ -148,7 +147,6 @@ function Register({ onSwitchToLogin }) {
     );
 }
 
-
 // --- Helper function to format seconds into HH:MM:SS ---
 const formatTime = (totalSeconds) => {
     if (totalSeconds < 0) totalSeconds = 0;
@@ -160,8 +158,7 @@ const formatTime = (totalSeconds) => {
         .join(":");
 };
 
-
-// --- Teacher Dashboard Component (Updated with Live Timer) ---
+// --- Teacher Dashboard Component ---
 function TeacherDashboard({ token, onLogout }) {
     const [isAvailable, setIsAvailable] = useState(false);
     const [teacherName, setTeacherName] = useState('Teacher');
@@ -169,18 +166,22 @@ function TeacherDashboard({ token, onLogout }) {
     const [availableTime, setAvailableTime] = useState(0); // Time from DB
     const [sessionDuration, setSessionDuration] = useState(0); // Live timer for current session
     const [queries, setQueries] = useState([]);
+    const tokenRef = useRef(token); // Use ref to avoid re-running effects when token changes
 
-    // useRef to hold the token to avoid dependency issues in useEffect
-    const tokenRef = useRef(token);
-
+    // Effect for fetching all initial data on component mount
     useEffect(() => {
-        const decodedToken = JSON.parse(atob(tokenRef.current.split('.')[1]));
-        const currentTeacherId = decodedToken.id;
+        let currentTeacherId;
+        try {
+            const decodedToken = JSON.parse(atob(tokenRef.current.split('.')[1]));
+            currentTeacherId = decodedToken.id;
+        } catch (e) {
+            console.error("Invalid token:", e);
+            onLogout();
+            return;
+        }
 
-        // Join the socket room for this specific teacher
         socket.emit('joinRoom', currentTeacherId);
 
-        // Fetch all initial data needed for the dashboard
         const fetchInitialData = async () => {
             try {
                 const headers = { 'x-auth-token': tokenRef.current };
@@ -197,11 +198,10 @@ function TeacherDashboard({ token, onLogout }) {
                 }
                 setAvailableTime(timeRes.data.totalAvailableTime);
                 setQueries(queriesRes.data);
-
             } catch (err) {
                 console.error("Error fetching initial data:", err);
                 if (err.response?.status === 401 || err.response?.status === 400) {
-                   onLogout(); // Token is invalid, log out
+                   onLogout(); // Token is invalid or expired
                 } else {
                    setError("Could not load dashboard data.");
                 }
@@ -211,7 +211,7 @@ function TeacherDashboard({ token, onLogout }) {
         fetchInitialData();
     }, [onLogout]);
 
-    // Effect for the LIVE timer when status is 'Available'
+    // Effect for the live session timer
     useEffect(() => {
         let timer;
         if (isAvailable) {
@@ -227,16 +227,13 @@ function TeacherDashboard({ token, onLogout }) {
         const handleNewQuery = (newQuery) => {
             setQueries(prevQueries => [newQuery, ...prevQueries]);
         };
-
         const handleQueryUpdate = (updatedQuery) => {
-            if(updatedQuery.status === 'ended'){
+            if (updatedQuery.status === 'ended') {
                 setQueries(prevQueries => prevQueries.filter(q => q._id !== updatedQuery._id));
             }
         };
-
         socket.on('newQuery', handleNewQuery);
         socket.on('queryUpdated', handleQueryUpdate);
-
         return () => {
             socket.off('newQuery', handleNewQuery);
             socket.off('queryUpdated', handleQueryUpdate);
@@ -253,12 +250,11 @@ function TeacherDashboard({ token, onLogout }) {
             );
             setIsAvailable(newStatus);
 
-            // If we just became unavailable, the backend has saved the time.
-            // Re-fetch the total from the server to get the precise value and reset the session timer.
             if (!newStatus) {
+                // If status changed to unavailable, re-fetch time to get accurate total
                 const timeRes = await axios.get(`${API_URL}/api/teachers/my-time`, { headers: { 'x-auth-token': token } });
                 setAvailableTime(timeRes.data.totalAvailableTime);
-                setSessionDuration(0);
+                setSessionDuration(0); // Reset live session timer
             }
         } catch (err) {
             setError('Failed to update status. Please try again.');
@@ -270,7 +266,7 @@ function TeacherDashboard({ token, onLogout }) {
             await axios.put(`${API_URL}/api/queries/${queryId}/end`, {}, {
                 headers: { 'x-auth-token': token }
             });
-            // The socket 'queryUpdated' event will remove it from the list automatically
+            // Query will be removed from the list via the 'queryUpdated' socket event
         } catch (err) {
             setError("Could not end the meeting. Please try again.");
         }

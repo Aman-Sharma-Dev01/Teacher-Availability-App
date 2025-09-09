@@ -8,8 +8,8 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const exceljs = require('exceljs'); // For Excel reports
-const { startOfDay, endOfDay, parseISO } = require('date-fns'); // For date handling
+const exceljs = require('exceljs');
+const { startOfDay, endOfDay, parseISO } = require('date-fns');
 const dotenv = require('dotenv');
 dotenv.config();
 
@@ -42,21 +42,30 @@ const teacherSchema = new mongoose.Schema({
     phone: { type: String, required: true},
     roomno: { type: String, required: true},
     isAvailable: { type: Boolean, default: false },
-    lastAvailableTimestamp: { type: Date } // NEW: For time tracking
+    lastAvailableTimestamp: { type: Date } // For time tracking
 });
 const Teacher = mongoose.model('Teacher', teacherSchema);
 
-// --- NEW: Query Model ---
+// --- NEW: Student Model ---
+const studentSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+}, { timestamps: true });
+const Student = mongoose.model('Student', studentSchema);
+
+
+// --- Query Model ---
 const querySchema = new mongoose.Schema({
     studentName: { type: String, required: true },
     queryText: { type: String, required: true },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', required: true },
     status: { type: String, enum: ['pending', 'ended'], default: 'pending' },
     resolution: { type: String, enum: ['satisfied', 'not_satisfied', null], default: null }
-}, { timestamps: true }); // `timestamps` adds createdAt and updatedAt automatically
+}, { timestamps: true });
 const Query = mongoose.model('Query', querySchema);
 
-// --- NEW: TimeRecord Model ---
+// --- TimeRecord Model ---
 const timeRecordSchema = new mongoose.Schema({
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'Teacher', required: true },
     date: { type: Date, required: true },
@@ -65,8 +74,8 @@ const timeRecordSchema = new mongoose.Schema({
 const TimeRecord = mongoose.model('TimeRecord', timeRecordSchema);
 
 
-// 6. AUTH MIDDLEWARE
-const authMiddleware = (req, res, next) => {
+// 6. AUTH MIDDLEWARE (Renamed for clarity)
+const teacherAuthMiddleware = (req, res, next) => {
     const token = req.header('x-auth-token');
     if (!token) return res.status(401).json({ message: 'No token, authorization denied' });
     try {
@@ -79,7 +88,7 @@ const authMiddleware = (req, res, next) => {
 
 // 7. API ROUTES
 
-// --- Auth Routes (Unchanged) ---
+// --- Teacher Auth Routes ---
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { name, email, password, phone, roomno } = req.body;
@@ -134,31 +143,82 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// --- NEW: Student Auth Routes ---
+app.post('/api/student/auth/register', async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: "Please provide all required fields for student registration." });
+        }
+
+        const existingStudent = await Student.findOne({ email });
+        if (existingStudent) {
+            return res.status(400).json({ message: "A student with this email already exists." });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const newStudent = new Student({ name, email, password: hashedPassword });
+        await newStudent.save();
+
+        res.status(201).json({ message: "Student registered successfully." });
+
+    } catch (error) {
+        res.status(500).json({ message: "Server error during student registration.", error: error.message });
+    }
+});
+app.post('/api/student/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const student = await Student.findOne({ email });
+        if (!student) {
+            return res.status(400).json({ message: "Invalid credentials." });
+        }
+
+        const isMatch = await bcrypt.compare(password, student.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: "Invalid credentials." });
+        }
+
+        const token = jwt.sign({ id: student._id, role: 'student' }, JWT_SECRET, { expiresIn: '30d' });
+
+        res.json({
+            token,
+            student: {
+                id: student._id,
+                name: student.name,
+                email: student.email,
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Server error during student login.", error: error.message });
+    }
+});
+
 
 // --- Teacher Routes ---
 app.get('/api/teachers', async (req, res) => {
     try {
-        const teachers = await Teacher.find().select('-password'); // Exclude password from result
+        const teachers = await Teacher.find().select('-password');
         res.json(teachers);
     } catch (error) {
         res.status(500).json({ message: "Server error fetching teachers.", error: error.message });
     }
 });
-// MAJOR UPDATE: Teacher Status and Time Tracking
-app.put('/api/teachers/status', authMiddleware, async (req, res) => {
+app.put('/api/teachers/status', teacherAuthMiddleware, async (req, res) => {
     try {
         const { isAvailable } = req.body;
         const teacherId = req.teacher.id;
         const teacher = await Teacher.findById(teacherId);
         if (!teacher) return res.status(404).json({ message: "Teacher not found." });
 
-        // Time Tracking Logic
-        if (teacher.isAvailable && !isAvailable) { // Going from Available to Not Available
+        if (teacher.isAvailable && !isAvailable) {
             if (teacher.lastAvailableTimestamp) {
-                const sessionDuration = (new Date() - new Date(teacher.lastAvailableTimestamp)) / 1000; // in seconds
+                const sessionDuration = (new Date() - new Date(teacher.lastAvailableTimestamp)) / 1000;
                 const today = startOfDay(new Date());
 
-                // Find or create a time record for this teacher for today
                 await TimeRecord.findOneAndUpdate(
                     { teacher: teacherId, date: today },
                     { $inc: { totalAvailableTime: sessionDuration } },
@@ -167,7 +227,6 @@ app.put('/api/teachers/status', authMiddleware, async (req, res) => {
             }
         }
 
-        // Update teacher's status and timestamp
         teacher.isAvailable = isAvailable;
         teacher.lastAvailableTimestamp = isAvailable ? new Date() : null;
         await teacher.save();
@@ -183,8 +242,7 @@ app.put('/api/teachers/status', authMiddleware, async (req, res) => {
     }
 });
 
-// NEW: Get a specific teacher's time record for today
-app.get('/api/teachers/my-time', authMiddleware, async(req, res) => {
+app.get('/api/teachers/my-time', teacherAuthMiddleware, async(req, res) => {
     try {
         const today = startOfDay(new Date());
         const record = await TimeRecord.findOne({ teacher: req.teacher.id, date: today });
@@ -194,8 +252,7 @@ app.get('/api/teachers/my-time', authMiddleware, async(req, res) => {
     }
 });
 
-// --- NEW: Query Routes ---
-// POST /api/queries - Create a new query
+// --- Query Routes ---
 app.post('/api/queries', async (req, res) => {
     try {
         const { studentName, queryText, teacherId } = req.body;
@@ -205,7 +262,6 @@ app.post('/api/queries', async (req, res) => {
         const newQuery = new Query({ studentName, queryText, teacher: teacherId });
         await newQuery.save();
 
-        // Notify the specific teacher in real-time
         io.to(teacherId).emit('newQuery', newQuery);
 
         res.status(201).json(newQuery);
@@ -214,8 +270,7 @@ app.post('/api/queries', async (req, res) => {
     }
 });
 
-// GET /api/queries/teacher - Get queries for the logged-in teacher
-app.get('/api/queries/teacher', authMiddleware, async (req, res) => {
+app.get('/api/queries/teacher', teacherAuthMiddleware, async (req, res) => {
     try {
         const queries = await Query.find({ teacher: req.teacher.id, status: 'pending' }).sort({ createdAt: -1 });
         res.json(queries);
@@ -224,8 +279,7 @@ app.get('/api/queries/teacher', authMiddleware, async (req, res) => {
     }
 });
 
-// PUT /api/queries/:id/end - Teacher ends a query session
-app.put('/api/queries/:id/end', authMiddleware, async (req, res) => {
+app.put('/api/queries/:id/end', teacherAuthMiddleware, async (req, res) => {
     try {
         const query = await Query.findOneAndUpdate(
             { _id: req.params.id, teacher: req.teacher.id },
@@ -234,7 +288,6 @@ app.put('/api/queries/:id/end', authMiddleware, async (req, res) => {
         );
         if (!query) return res.status(404).json({ message: "Query not found or unauthorized." });
         
-        // Notify everyone (or a specific student room if implemented) about the update
         io.emit('queryUpdated', query);
         res.json(query);
     } catch (error) {
@@ -242,7 +295,6 @@ app.put('/api/queries/:id/end', authMiddleware, async (req, res) => {
     }
 });
 
-// PUT /api/queries/:id/resolve - Student marks query as satisfied/not satisfied
 app.put('/api/queries/:id/resolve', async (req, res) => {
     try {
         const { resolution } = req.body;
@@ -260,25 +312,25 @@ app.put('/api/queries/:id/resolve', async (req, res) => {
 });
 
 
-// --- NEW: Daily Report Route ---
+// --- Daily Report Route ---
 app.get('/api/reports/daily', async (req, res) => {
     try {
         const date = req.query.date ? parseISO(req.query.date) : new Date();
         const reportDateStart = startOfDay(date);
         const reportDateEnd = endOfDay(date);
 
-        // 1. Fetch Data
-        const timeRecords = await TimeRecord.find({ date: reportDateStart }).populate('teacher', 'name email');
+        const timeRecords = await TimeRecord.find({
+  date: { $gte: reportDateStart, $lt: reportDateEnd }
+})
+.populate('teacher', 'name email');
         const queries = await Query.find({ 
             createdAt: { $gte: reportDateStart, $lt: reportDateEnd } 
         }).populate('teacher', 'name email').sort({createdAt: 1});
 
-        // 2. Create Excel Workbook
         const workbook = new exceljs.Workbook();
         workbook.creator = 'Teacher Availability App';
         workbook.created = new Date();
 
-        // Availability Sheet
         const availabilitySheet = workbook.addWorksheet('Teacher Availability');
         availabilitySheet.columns = [
             { header: 'Teacher Name', key: 'name', width: 30 },
@@ -289,11 +341,10 @@ app.get('/api/reports/daily', async (req, res) => {
             availabilitySheet.addRow({
                 name: record.teacher.name,
                 email: record.teacher.email,
-                time: new Date(record.totalAvailableTime * 1000).toISOString().substr(11, 8) // format as HH:MM:SS
+                time: new Date(record.totalAvailableTime * 1000).toISOString().substr(11, 8)
             });
         });
 
-        // Queries Sheet
         const querySheet = workbook.addWorksheet('Daily Queries');
         querySheet.columns = [
             { header: 'Time', key: 'time', width: 20 },
@@ -312,7 +363,6 @@ app.get('/api/reports/daily', async (req, res) => {
             });
         });
         
-        // 3. Send file to client
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="DailyReport-${date.toISOString().split('T')[0]}.xlsx"`);
         await workbook.xlsx.write(res);
@@ -329,8 +379,6 @@ app.get('/api/reports/daily', async (req, res) => {
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
-    // NEW: Allow teachers to join a "room" based on their ID
-    // The frontend will emit this event after a teacher logs in.
     socket.on('joinRoom', (teacherId) => {
         socket.join(teacherId);
         console.log(`Teacher with ID ${teacherId} joined their room.`);
@@ -345,5 +393,3 @@ io.on('connection', (socket) => {
 // 9. START SERVER
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
-
-
